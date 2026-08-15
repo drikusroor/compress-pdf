@@ -142,9 +142,46 @@
     qualityValue.textContent = `${qualityInput.value}%`;
   });
 
+  function formatMaxDim(value) {
+    return Number(value) >= Number(maxDimInput.max) ? 'No limit' : `${value} px`;
+  }
+
   maxDimInput.addEventListener('input', () => {
-    maxDimValue.textContent = `${maxDimInput.value} px`;
+    maxDimValue.textContent = formatMaxDim(maxDimInput.value);
   });
+
+  // ---------- JPEG encoding (MozJPEG via WebAssembly, falling back to the
+  // browser's built-in canvas encoder if anything goes wrong loading it) ----------
+
+  let mozjpegEncodePromise = null;
+
+  function loadMozjpegEncoder() {
+    if (!mozjpegEncodePromise) {
+      mozjpegEncodePromise = import('./vendor/mozjpeg/encode.js')
+        .then((mod) => mod.default)
+        .catch((err) => {
+          console.warn('MozJPEG WASM encoder unavailable, falling back to canvas JPEG encoder:', err);
+          return null;
+        });
+    }
+    return mozjpegEncodePromise;
+  }
+
+  async function encodeJpeg(canvas, ctx, quality) {
+    const mozjpegEncode = await loadMozjpegEncoder();
+    if (mozjpegEncode) {
+      try {
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const buffer = await mozjpegEncode(imageData, { quality });
+        return new Uint8Array(buffer);
+      } catch (err) {
+        console.warn('MozJPEG encode failed, falling back to canvas JPEG encoder:', err);
+      }
+    }
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality / 100));
+    if (!blob) return null;
+    return new Uint8Array(await blob.arrayBuffer());
+  }
 
   // ---------- Image extraction / recompression ----------
 
@@ -247,12 +284,9 @@
     if (grayscale) ctx.filter = 'grayscale(1)';
     ctx.drawImage(bitmap, 0, 0, targetW, targetH);
 
-    const blob = await new Promise((resolve) =>
-      canvas.toBlob(resolve, 'image/jpeg', quality / 100)
-    );
-    if (!blob) return null;
-    const buf = await blob.arrayBuffer();
-    return { bytes: new Uint8Array(buf), width: targetW, height: targetH };
+    const bytes = await encodeJpeg(canvas, ctx, quality);
+    if (!bytes) return null;
+    return { bytes, width: targetW, height: targetH };
   }
 
   async function compressPdfImages(pdfBytes, options, onProgress) {

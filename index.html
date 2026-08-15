@@ -45,19 +45,19 @@
           <label class="control">
             <span class="control__label">
               Image quality
-              <span id="quality-value" class="control__value">70%</span>
+              <span id="quality-value" class="control__value">75%</span>
             </span>
-            <input type="range" id="quality" min="10" max="95" step="5" value="70" />
+            <input type="range" id="quality" min="10" max="95" step="5" value="75" />
             <span class="control__hint">Lower quality = smaller file. 60–80% is usually a good balance.</span>
           </label>
 
           <label class="control">
             <span class="control__label">
               Max image resolution
-              <span id="max-dim-value" class="control__value">1600 px</span>
+              <span id="max-dim-value" class="control__value">No limit</span>
             </span>
-            <input type="range" id="max-dim" min="400" max="4000" step="100" value="1600" />
-            <span class="control__hint">Images wider or taller than this are downscaled.</span>
+            <input type="range" id="max-dim" min="400" max="4000" step="100" value="4000" />
+            <span class="control__hint">Images wider or taller than this are downscaled. Lower this only if you don't need full resolution — it can blur text/photos more than the quality slider does.</span>
           </label>
 
           <label class="control control--checkbox">
@@ -109,7 +109,8 @@
     <footer class="site-footer">
       <p>
         Runs 100% client-side using <a href="https://pdf-lib.js.org/" target="_blank" rel="noopener noreferrer">pdf-lib</a>
-        and your browser's built-in image codecs. No files are ever uploaded to a server.
+        and a WebAssembly build of <a href="https://github.com/mozilla/mozjpeg" target="_blank" rel="noopener noreferrer">MozJPEG</a>.
+        No files are ever uploaded to a server.
         &middot; <a href="https://github.com/drikusroor/compress-pdf" target="_blank" rel="noopener noreferrer">Source on GitHub</a>
       </p>
     </footer>
