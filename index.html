@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Compress PDF — client-side PDF image compressor</title>
+  <meta name="description" content="Shrink PDF file size by recompressing the images inside it. Runs entirely in your browser — nothing is uploaded." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🗜️</text></svg>" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <h1>🗜️ Compress PDF</h1>
+      <p class="subtitle">
+        Shrink a PDF by recompressing its images — entirely in your browser.
+        Nothing is uploaded anywhere; your files never leave this device.
+      </p>
+    </header>
+
+    <main>
+      <section id="drop-zone" class="drop-zone">
+        <input type="file" id="file-input" accept="application/pdf" hidden />
+        <div class="drop-zone__content">
+          <div class="drop-zone__icon" aria-hidden="true">📄</div>
+          <p class="drop-zone__text">
+            <label for="file-input" class="link-like">Choose a PDF</label>
+            or drag and drop it here
+          </p>
+          <p class="drop-zone__hint">Your PDF stays on your device — all processing happens locally.</p>
+        </div>
+      </section>
+
+      <section id="options" class="panel hidden">
+        <div class="file-summary">
+          <div class="file-summary__icon" aria-hidden="true">📄</div>
+          <div class="file-summary__meta">
+            <div id="file-name" class="file-summary__name"></div>
+            <div id="file-size" class="file-summary__size"></div>
+          </div>
+          <button id="change-file" class="btn btn--ghost" type="button">Change file</button>
+        </div>
+
+        <div class="controls">
+          <label class="control">
+            <span class="control__label">
+              Image quality
+              <span id="quality-value" class="control__value">70%</span>
+            </span>
+            <input type="range" id="quality" min="10" max="95" step="5" value="70" />
+            <span class="control__hint">Lower quality = smaller file. 60–80% is usually a good balance.</span>
+          </label>
+
+          <label class="control">
+            <span class="control__label">
+              Max image resolution
+              <span id="max-dim-value" class="control__value">1600 px</span>
+            </span>
+            <input type="range" id="max-dim" min="400" max="4000" step="100" value="1600" />
+            <span class="control__hint">Images wider or taller than this are downscaled.</span>
+          </label>
+
+          <label class="control control--checkbox">
+            <input type="checkbox" id="grayscale" />
+            <span>Convert images to grayscale (extra savings for text/scans)</span>
+          </label>
+        </div>
+
+        <button id="compress-btn" class="btn btn--primary" type="button">Compress PDF</button>
+
+        <div id="progress" class="progress hidden">
+          <div class="progress__bar">
+            <div id="progress-fill" class="progress__fill"></div>
+          </div>
+          <div id="progress-text" class="progress__text">Working…</div>
+        </div>
+      </section>
+
+      <section id="result" class="panel hidden">
+        <h2>Done! 🎉</h2>
+        <div class="result-stats">
+          <div class="stat">
+            <div class="stat__label">Original</div>
+            <div id="stat-original" class="stat__value"></div>
+          </div>
+          <div class="stat stat--arrow" aria-hidden="true">→</div>
+          <div class="stat">
+            <div class="stat__label">Compressed</div>
+            <div id="stat-compressed" class="stat__value"></div>
+          </div>
+          <div class="stat stat--savings">
+            <div class="stat__label">Saved</div>
+            <div id="stat-savings" class="stat__value"></div>
+          </div>
+        </div>
+        <div class="result-actions">
+          <a id="download-link" class="btn btn--primary" download>Download compressed PDF</a>
+          <button id="start-over" class="btn btn--ghost" type="button">Compress another file</button>
+        </div>
+        <p id="result-note" class="result-note hidden"></p>
+      </section>
+
+      <section id="error" class="panel panel--error hidden">
+        <p id="error-text"></p>
+        <button id="error-dismiss" class="btn btn--ghost" type="button">Try again</button>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <p>
+        Runs 100% client-side using <a href="https://pdf-lib.js.org/" target="_blank" rel="noopener noreferrer">pdf-lib</a>
+        and your browser's built-in image codecs. No files are ever uploaded to a server.
+        &middot; <a href="https://github.com/drikusroor/compress-pdf" target="_blank" rel="noopener noreferrer">Source on GitHub</a>
+      </p>
+    </footer>
+  </div>
+
+  <script src="vendor/pdf-lib.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
