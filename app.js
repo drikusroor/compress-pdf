@@ -1,411 +1,419 @@
-(() => {
-  'use strict';
+// UI wiring. All of the actual work lives in ./lib.
 
-  const {
-    PDFDocument,
-    PDFName,
-    PDFArray,
-    PDFRawStream,
-    PDFStream,
-  } = PDFLib;
+import { compressPdfImages } from './lib/pdf-images.js';
+import { renderPdfToImages } from './lib/pdf-render.js';
+import { FORMATS, isFormatSupported } from './lib/encode.js';
+import { createZip } from './lib/zip.js';
+import { CancelledError, formatBytes } from './lib/util.js';
 
-  const fileInput = document.getElementById('file-input');
-  const dropZone = document.getElementById('drop-zone');
-  const optionsPanel = document.getElementById('options');
-  const resultPanel = document.getElementById('result');
-  const errorPanel = document.getElementById('error');
-  const errorText = document.getElementById('error-text');
-  const errorDismiss = document.getElementById('error-dismiss');
+const $ = (id) => document.getElementById(id);
 
-  const fileNameEl = document.getElementById('file-name');
-  const fileSizeEl = document.getElementById('file-size');
-  const changeFileBtn = document.getElementById('change-file');
+const fileInput = $('file-input');
+const dropZone = $('drop-zone');
+const optionsPanel = $('options');
+const resultPanel = $('result');
+const imagesPanel = $('images');
+const errorPanel = $('error');
+const errorText = $('error-text');
 
-  const qualityInput = document.getElementById('quality');
-  const qualityValue = document.getElementById('quality-value');
-  const maxDimInput = document.getElementById('max-dim');
-  const maxDimValue = document.getElementById('max-dim-value');
-  const grayscaleInput = document.getElementById('grayscale');
+const fileNameEl = $('file-name');
+const fileSizeEl = $('file-size');
 
-  const compressBtn = document.getElementById('compress-btn');
-  const progressEl = document.getElementById('progress');
-  const progressFill = document.getElementById('progress-fill');
-  const progressText = document.getElementById('progress-text');
+const tabCompress = $('tab-compress');
+const tabConvert = $('tab-convert');
+const panelCompress = $('panel-compress');
+const panelConvert = $('panel-convert');
 
-  const statOriginal = document.getElementById('stat-original');
-  const statCompressed = document.getElementById('stat-compressed');
-  const statSavings = document.getElementById('stat-savings');
-  const downloadLink = document.getElementById('download-link');
-  const startOverBtn = document.getElementById('start-over');
-  const resultNote = document.getElementById('result-note');
+const qualityInput = $('quality');
+const qualityValue = $('quality-value');
+const maxDimInput = $('max-dim');
+const maxDimValue = $('max-dim-value');
+const grayscaleInput = $('grayscale');
+const compressBtn = $('compress-btn');
 
-  let currentFile = null;
+const convertFormat = $('convert-format');
+const convertDpi = $('convert-dpi');
+const convertQuality = $('convert-quality');
+const convertQualityValue = $('convert-quality-value');
+const convertQualityControl = $('convert-quality-control');
+const convertMaxWidth = $('convert-max-width');
+const convertMaxHeight = $('convert-max-height');
+const convertPages = $('convert-pages');
+const convertGrayscale = $('convert-grayscale');
+const convertBtn = $('convert-btn');
 
-  // ---------- UI helpers ----------
+const progressEl = $('progress');
+const progressFill = $('progress-fill');
+const progressText = $('progress-text');
+const cancelBtn = $('cancel-btn');
 
-  function formatBytes(bytes) {
-    if (bytes === 0) return '0 B';
-    const units = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
-    const value = bytes / Math.pow(1024, i);
-    return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+const statOriginal = $('stat-original');
+const statCompressed = $('stat-compressed');
+const statSavings = $('stat-savings');
+const downloadLink = $('download-link');
+const resultNote = $('result-note');
+const resultDetails = $('result-details');
+const resultDetailsBody = $('result-details-body');
+
+const imagesSummary = $('images-summary');
+const imagesGrid = $('images-grid');
+const downloadZipBtn = $('download-zip');
+
+let currentFile = null;
+let cancelled = false;
+let busy = false;
+let renderedPages = [];
+const objectUrls = new Set();
+
+// ---------- small UI helpers ----------
+
+function trackUrl(url) {
+  objectUrls.add(url);
+  return url;
+}
+
+function releaseUrls() {
+  for (const url of objectUrls) URL.revokeObjectURL(url);
+  objectUrls.clear();
+}
+
+function showPanel(panel) {
+  for (const p of [dropZone, optionsPanel, resultPanel, imagesPanel, errorPanel]) {
+    p.classList.toggle('hidden', p !== panel);
   }
+}
 
-  function showPanel(panel) {
-    [dropZone, optionsPanel, resultPanel, errorPanel].forEach((p) => p.classList.add('hidden'));
-    panel.classList.remove('hidden');
+function showError(message) {
+  errorText.textContent = message;
+  showPanel(errorPanel);
+}
+
+function setProgress(fraction, text) {
+  progressEl.classList.remove('hidden');
+  progressFill.style.width = `${Math.round(Math.min(1, Math.max(0, fraction)) * 100)}%`;
+  progressText.textContent = text;
+}
+
+function resetProgress() {
+  progressEl.classList.add('hidden');
+  progressFill.style.width = '0%';
+}
+
+function setBusy(value) {
+  busy = value;
+  compressBtn.disabled = value;
+  convertBtn.disabled = value;
+}
+
+// ---------- file selection ----------
+
+function handleFile(file) {
+  if (!file) return;
+  if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+    showError('That does not look like a PDF file. Please choose a .pdf file.');
+    return;
   }
+  currentFile = file;
+  fileNameEl.textContent = file.name;
+  fileSizeEl.textContent = formatBytes(file.size);
+  setBusy(false);
+  resetProgress();
+  showPanel(optionsPanel);
+}
 
-  function showError(message) {
-    errorText.textContent = message;
-    showPanel(errorPanel);
-  }
+fileInput.addEventListener('change', (e) => handleFile(e.target.files[0]));
+dropZone.addEventListener('click', () => fileInput.click());
 
-  function setProgress(fraction, text) {
-    progressEl.classList.remove('hidden');
-    progressFill.style.width = `${Math.round(fraction * 100)}%`;
-    progressText.textContent = text;
-  }
-
-  function resetProgress() {
-    progressEl.classList.add('hidden');
-    progressFill.style.width = '0%';
-  }
-
-  function yieldToUI() {
-    return new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
-  }
-
-  // ---------- File selection ----------
-
-  function handleFile(file) {
-    if (!file) return;
-    if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
-      showError('That does not look like a PDF file. Please choose a .pdf file.');
-      return;
-    }
-    currentFile = file;
-    fileNameEl.textContent = file.name;
-    fileSizeEl.textContent = formatBytes(file.size);
-    compressBtn.disabled = false;
-    resetProgress();
-    showPanel(optionsPanel);
-  }
-
-  fileInput.addEventListener('change', (e) => {
-    handleFile(e.target.files[0]);
+for (const evt of ['dragenter', 'dragover']) {
+  dropZone.addEventListener(evt, (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dropZone.classList.add('drop-zone--active');
   });
-
-  dropZone.addEventListener('click', () => fileInput.click());
-
-  ['dragenter', 'dragover'].forEach((evt) => {
-    dropZone.addEventListener(evt, (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      dropZone.classList.add('drop-zone--active');
-    });
+}
+for (const evt of ['dragleave', 'drop']) {
+  dropZone.addEventListener(evt, (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dropZone.classList.remove('drop-zone--active');
   });
+}
+dropZone.addEventListener('drop', (e) => handleFile(e.dataTransfer.files && e.dataTransfer.files[0]));
 
-  ['dragleave', 'drop'].forEach((evt) => {
-    dropZone.addEventListener(evt, (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      dropZone.classList.remove('drop-zone--active');
-    });
-  });
+function startOver() {
+  currentFile = null;
+  fileInput.value = '';
+  renderedPages = [];
+  releaseUrls();
+  resetProgress();
+  showPanel(dropZone);
+}
 
-  dropZone.addEventListener('drop', (e) => {
-    const file = e.dataTransfer.files && e.dataTransfer.files[0];
-    handleFile(file);
-  });
+$('change-file').addEventListener('click', startOver);
+$('start-over').addEventListener('click', startOver);
+$('images-start-over').addEventListener('click', startOver);
+$('error-dismiss').addEventListener('click', () => showPanel(currentFile ? optionsPanel : dropZone));
 
-  changeFileBtn.addEventListener('click', () => {
-    currentFile = null;
-    fileInput.value = '';
-    showPanel(dropZone);
-  });
+cancelBtn.addEventListener('click', () => {
+  cancelled = true;
+  progressText.textContent = 'Cancelling…';
+});
 
-  startOverBtn.addEventListener('click', () => {
-    currentFile = null;
-    fileInput.value = '';
-    resetProgress();
-    showPanel(dropZone);
-  });
+// ---------- tabs ----------
 
-  errorDismiss.addEventListener('click', () => {
-    showPanel(currentFile ? optionsPanel : dropZone);
-  });
+function selectTab(which) {
+  const compress = which === 'compress';
+  tabCompress.classList.toggle('tab--active', compress);
+  tabConvert.classList.toggle('tab--active', !compress);
+  tabCompress.setAttribute('aria-selected', String(compress));
+  tabConvert.setAttribute('aria-selected', String(!compress));
+  panelCompress.classList.toggle('hidden', !compress);
+  panelConvert.classList.toggle('hidden', compress);
+}
 
-  // ---------- Option displays ----------
+tabCompress.addEventListener('click', () => !busy && selectTab('compress'));
+tabConvert.addEventListener('click', () => !busy && selectTab('convert'));
 
-  qualityInput.addEventListener('input', () => {
-    qualityValue.textContent = `${qualityInput.value}%`;
-  });
+// ---------- option displays ----------
 
-  function formatMaxDim(value) {
-    return Number(value) >= Number(maxDimInput.max) ? 'No limit' : `${value} px`;
+qualityInput.addEventListener('input', () => {
+  qualityValue.textContent = `${qualityInput.value}%`;
+});
+
+maxDimInput.addEventListener('input', () => {
+  const value = Number(maxDimInput.value);
+  maxDimValue.textContent = value >= Number(maxDimInput.max) ? 'No limit' : `${value} px`;
+});
+
+convertQuality.addEventListener('input', () => {
+  convertQualityValue.textContent = `${convertQuality.value}%`;
+});
+
+function syncFormatControls() {
+  const spec = FORMATS[convertFormat.value] || FORMATS.jpeg;
+  convertQualityControl.classList.toggle('control--disabled', !spec.lossy);
+  convertQuality.disabled = !spec.lossy;
+}
+
+convertFormat.addEventListener('change', syncFormatControls);
+syncFormatControls();
+
+isFormatSupported('webp').then((supported) => {
+  if (supported) return;
+  const option = convertFormat.querySelector('option[value="webp"]');
+  if (option) {
+    option.disabled = true;
+    option.textContent = 'WebP (not supported by this browser)';
+  }
+});
+
+// ---------- compress ----------
+
+function describeStats(stats) {
+  const lines = [];
+  lines.push(
+    `<p>Images in this PDF: <strong>${stats.total}</strong> — ` +
+      `${stats.compressed} recompressed, ${stats.skipped} left as-is, ${stats.failed} could not be decoded.</p>`,
+  );
+  lines.push(
+    `<p>Image data: <strong>${formatBytes(stats.bytesBefore)}</strong> → ` +
+      `<strong>${formatBytes(stats.bytesAfter)}</strong>` +
+      `${stats.downscaled ? `, with ${stats.downscaled} downscaled to fit the resolution limit` : ''}.</p>`,
+  );
+
+  if (stats.kinds.size) {
+    const rows = [...stats.kinds.entries()]
+      .sort((a, b) => b[1].bytes - a[1].bytes)
+      .map(
+        ([kind, info]) =>
+          `<tr><td>${escapeHtml(kind)}</td><td>${info.count}</td><td>${formatBytes(info.bytes)}</td></tr>`,
+      )
+      .join('');
+    lines.push(
+      `<table class="detail-table"><thead><tr><th>Filter · colour space</th><th>Count</th><th>Original size</th></tr></thead><tbody>${rows}</tbody></table>`,
+    );
   }
 
-  maxDimInput.addEventListener('input', () => {
-    maxDimValue.textContent = formatMaxDim(maxDimInput.value);
-  });
-
-  // ---------- JPEG encoding (MozJPEG via WebAssembly, falling back to the
-  // browser's built-in canvas encoder if anything goes wrong loading it) ----------
-
-  let mozjpegEncodePromise = null;
-
-  function loadMozjpegEncoder() {
-    if (!mozjpegEncodePromise) {
-      mozjpegEncodePromise = import('./vendor/mozjpeg/encode.js')
-        .then((mod) => mod.default)
-        .catch((err) => {
-          console.warn('MozJPEG WASM encoder unavailable, falling back to canvas JPEG encoder:', err);
-          return null;
-        });
-    }
-    return mozjpegEncodePromise;
+  if (stats.reasons.size) {
+    const rows = [...stats.reasons.entries()]
+      .sort((a, b) => b[1].count - a[1].count)
+      .map(([reason, info]) => `<tr><td>${escapeHtml(reason)}</td><td>${info.count}</td></tr>`)
+      .join('');
+    lines.push(
+      `<table class="detail-table"><thead><tr><th>Left unchanged because</th><th>Count</th></tr></thead><tbody>${rows}</tbody></table>`,
+    );
   }
 
-  async function encodeJpeg(canvas, ctx, quality) {
-    const mozjpegEncode = await loadMozjpegEncoder();
-    if (mozjpegEncode) {
-      try {
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const buffer = await mozjpegEncode(imageData, { quality });
-        return new Uint8Array(buffer);
-      } catch (err) {
-        console.warn('MozJPEG encode failed, falling back to canvas JPEG encoder:', err);
-      }
-    }
-    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality / 100));
-    if (!blob) return null;
-    return new Uint8Array(await blob.arrayBuffer());
+  return lines.join('');
+}
+
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+}
+
+function summarise(stats, originalSize, compressedSize) {
+  if (stats.total === 0) {
+    return 'No embedded images were found in this PDF, so there was nothing to recompress. ' +
+      'Text, fonts and vector graphics are already compressed and are left untouched.';
   }
 
-  // ---------- Image extraction / recompression ----------
-
-  const SUPPORTED_COLOR_SPACES = new Set(['DeviceRGB', 'DeviceGray', 'CalRGB', 'CalGray']);
-
-  function resolveColorSpaceName(dict) {
-    let cs = dict.lookup(PDFName.of('ColorSpace'));
-    if (cs instanceof PDFArray) {
-      // e.g. ICCBased streams or Indexed color spaces are not handled.
-      const first = cs.get(0);
-      if (first instanceof PDFName) return first.decodeText();
-      return null;
-    }
-    if (cs instanceof PDFName) return cs.decodeText();
-    return null;
+  const parts = [];
+  if (stats.compressed === 0) {
+    parts.push(`Found ${stats.total} image(s), but none could be made smaller.`);
+  } else {
+    parts.push(`Recompressed ${stats.compressed} of ${stats.total} image(s).`);
   }
 
-  function getSingleFilterName(dict) {
-    const filter = dict.get(PDFName.of('Filter'));
-    if (filter instanceof PDFName) return filter.decodeText();
-    if (filter instanceof PDFArray) {
-      if (filter.size() !== 1) return null;
-      const only = filter.get(0);
-      return only instanceof PDFName ? only.decodeText() : null;
-    }
-    return null;
+  const imageShare = originalSize > 0 ? (stats.bytesBefore / originalSize) * 100 : 0;
+  if (stats.total > 0 && imageShare < 50) {
+    parts.push(
+      `Images only account for ${imageShare.toFixed(0)}% of this file ` +
+        `(${formatBytes(stats.bytesBefore)} of ${formatBytes(originalSize)}) — the rest is text, ` +
+        'fonts, vector art or metadata, which this tool never touches.',
+    );
+  } else if (compressedSize >= originalSize) {
+    parts.push('The result is not smaller, so the original is probably already well optimised.');
   }
 
-  async function inflate(bytes) {
-    if (typeof DecompressionStream === 'undefined') {
-      throw new Error('DecompressionStream unsupported');
-    }
-    const ds = new DecompressionStream('deflate');
-    const stream = new Blob([bytes]).stream().pipeThrough(ds);
-    const buf = await new Response(stream).arrayBuffer();
-    return new Uint8Array(buf);
-  }
+  return parts.join(' ');
+}
 
-  async function decodeImageObject(dict, contents) {
-    const filterName = getSingleFilterName(dict);
-    const width = dict.lookup(PDFName.of('Width'))?.asNumber();
-    const height = dict.lookup(PDFName.of('Height'))?.asNumber();
-    if (!width || !height) return null;
+compressBtn.addEventListener('click', async () => {
+  if (!currentFile || busy) return;
+  cancelled = false;
+  setBusy(true);
+  setProgress(0.02, 'Reading file…');
 
-    if (filterName === 'DCTDecode') {
-      const blob = new Blob([contents], { type: 'image/jpeg' });
-      const bitmap = await createImageBitmap(blob);
-      return bitmap;
-    }
-
-    if (filterName === 'FlateDecode') {
-      const bpc = dict.lookup(PDFName.of('BitsPerComponent'))?.asNumber();
-      const csName = resolveColorSpaceName(dict);
-      if (bpc !== 8 || !SUPPORTED_COLOR_SPACES.has(csName)) return null;
-
-      const raw = await inflate(contents);
-      const channels = csName === 'DeviceGray' || csName === 'CalGray' ? 1 : 3;
-      const expectedLength = width * height * channels;
-      if (raw.length < expectedLength) return null;
-
-      const rgba = new Uint8ClampedArray(width * height * 4);
-      for (let i = 0, p = 0; i < expectedLength; i += channels, p += 4) {
-        if (channels === 1) {
-          rgba[p] = rgba[p + 1] = rgba[p + 2] = raw[i];
-        } else {
-          rgba[p] = raw[i];
-          rgba[p + 1] = raw[i + 1];
-          rgba[p + 2] = raw[i + 2];
-        }
-        rgba[p + 3] = 255;
-      }
-      const imageData = new ImageData(rgba, width, height);
-      const bitmap = await createImageBitmap(imageData);
-      return bitmap;
-    }
-
-    return null;
-  }
-
-  function isSkippable(dict) {
-    const imageMask = dict.lookup(PDFName.of('ImageMask'));
-    if (imageMask && imageMask.asBoolean?.()) return true;
-    if (dict.get(PDFName.of('SMask'))) return true;
-    if (dict.get(PDFName.of('Mask'))) return true;
-    if (dict.get(PDFName.of('Decode'))) return true;
-    return false;
-  }
-
-  async function recompressImage(bitmap, options) {
-    const { maxDim, quality, grayscale } = options;
-    let { width, height } = bitmap;
-    const scale = Math.min(1, maxDim / Math.max(width, height));
-    const targetW = Math.max(1, Math.round(width * scale));
-    const targetH = Math.max(1, Math.round(height * scale));
-
-    const canvas = document.createElement('canvas');
-    canvas.width = targetW;
-    canvas.height = targetH;
-    const ctx = canvas.getContext('2d');
-    if (grayscale) ctx.filter = 'grayscale(1)';
-    ctx.drawImage(bitmap, 0, 0, targetW, targetH);
-
-    const bytes = await encodeJpeg(canvas, ctx, quality);
-    if (!bytes) return null;
-    return { bytes, width: targetW, height: targetH };
-  }
-
-  async function compressPdfImages(pdfBytes, options, onProgress) {
-    const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
-    const context = pdfDoc.context;
-    const entries = context.enumerateIndirectObjects();
-
-    const imageEntries = entries.filter(([, obj]) => {
-      if (!(obj instanceof PDFStream)) return false;
-      const subtype = obj.dict.get(PDFName.of('Subtype'));
-      return subtype instanceof PDFName && subtype.decodeText() === 'Image';
-    });
-
-    let processed = 0;
-    let replaced = 0;
-
-    for (const [ref, obj] of imageEntries) {
-      processed += 1;
-      onProgress(processed / Math.max(1, imageEntries.length), `Compressing image ${processed} of ${imageEntries.length}…`);
-
-      try {
-        const dict = obj.dict;
-        if (isSkippable(dict)) continue;
-
-        const contents = obj.getContents ? obj.getContents() : null;
-        if (!contents) continue;
-
-        const bitmap = await decodeImageObject(dict, contents);
-        if (!bitmap) continue;
-
-        const result = await recompressImage(bitmap, options);
-        bitmap.close?.();
-        if (!result) continue;
-
-        if (result.bytes.length >= contents.length) continue;
-
-        const newDict = context.obj({
-          Type: 'XObject',
-          Subtype: 'Image',
-          Width: result.width,
-          Height: result.height,
-          ColorSpace: 'DeviceRGB',
-          BitsPerComponent: 8,
-          Filter: 'DCTDecode',
-        });
-        const newStream = PDFRawStream.of(newDict, result.bytes);
-        context.assign(ref, newStream);
-        replaced += 1;
-      } catch (err) {
-        console.warn('Skipping image due to error:', err);
-      }
-
-      if (processed % 3 === 0) await yieldToUI();
-    }
-
-    onProgress(0.98, 'Saving PDF…');
-    const outBytes = await pdfDoc.save({ useObjectStreams: true });
-    return { bytes: outBytes, imagesFound: imageEntries.length, imagesReplaced: replaced };
-  }
-
-  // ---------- Main compress flow ----------
-
-  compressBtn.addEventListener('click', async () => {
-    if (!currentFile) return;
-
-    compressBtn.disabled = true;
-    setProgress(0.02, 'Reading file…');
-
-    try {
-      const originalBytes = new Uint8Array(await currentFile.arrayBuffer());
-      const options = {
+  try {
+    const originalBytes = new Uint8Array(await currentFile.arrayBuffer());
+    const { bytes: outBytes, stats } = await compressPdfImages(
+      originalBytes,
+      {
         quality: Number(qualityInput.value),
-        maxDim: Number(maxDimInput.value),
+        maxDim: Number(maxDimInput.value) >= Number(maxDimInput.max) ? Infinity : Number(maxDimInput.value),
         grayscale: grayscaleInput.checked,
-      };
+      },
+      (fraction, text) => setProgress(0.05 + fraction * 0.9, text),
+      () => cancelled,
+    );
 
-      const { bytes: outBytes, imagesFound, imagesReplaced } = await compressPdfImages(
-        originalBytes,
-        options,
-        (fraction, text) => setProgress(0.05 + fraction * 0.9, text)
-      );
+    setProgress(1, 'Done!');
 
-      setProgress(1, 'Done!');
+    const originalSize = originalBytes.length;
+    const compressedSize = outBytes.length;
+    const saved = originalSize - compressedSize;
+    const savedPct = originalSize > 0 ? (saved / originalSize) * 100 : 0;
 
-      const originalSize = originalBytes.length;
-      const compressedSize = outBytes.length;
-      const saved = originalSize - compressedSize;
-      const savedPct = originalSize > 0 ? (saved / originalSize) * 100 : 0;
+    statOriginal.textContent = formatBytes(originalSize);
+    statCompressed.textContent = formatBytes(Math.max(compressedSize, 0));
+    statSavings.textContent = saved > 0 ? `${formatBytes(saved)} (${savedPct.toFixed(0)}%)` : 'None';
 
-      statOriginal.textContent = formatBytes(originalSize);
-      statCompressed.textContent = formatBytes(Math.max(compressedSize, 0));
-      statSavings.textContent = saved > 0 ? `${formatBytes(saved)} (${savedPct.toFixed(0)}%)` : 'None';
+    releaseUrls();
+    downloadLink.href = trackUrl(URL.createObjectURL(new Blob([outBytes], { type: 'application/pdf' })));
+    downloadLink.download = `${currentFile.name.replace(/\.pdf$/i, '')}-compressed.pdf`;
 
-      const blob = new Blob([outBytes], { type: 'application/pdf' });
-      const url = URL.createObjectURL(blob);
-      const baseName = currentFile.name.replace(/\.pdf$/i, '');
-      downloadLink.href = url;
-      downloadLink.download = `${baseName}-compressed.pdf`;
+    resultNote.textContent = summarise(stats, originalSize, compressedSize);
+    resultNote.classList.remove('hidden');
+    resultDetailsBody.innerHTML = describeStats(stats);
+    resultDetails.classList.toggle('hidden', stats.total === 0);
+    resultDetails.open = false;
 
-      resultNote.classList.add('hidden');
-      if (imagesFound === 0) {
-        resultNote.textContent = 'No embedded images were found in this PDF — nothing to compress.';
-        resultNote.classList.remove('hidden');
-      } else if (imagesReplaced === 0) {
-        resultNote.textContent = `Found ${imagesFound} image(s), but none could be compressed further (unsupported format or already optimal).`;
-        resultNote.classList.remove('hidden');
-      } else if (imagesReplaced < imagesFound) {
-        resultNote.textContent = `Compressed ${imagesReplaced} of ${imagesFound} image(s); the rest were left unchanged (unsupported format).`;
-        resultNote.classList.remove('hidden');
-      }
-
-      resetProgress();
-      showPanel(resultPanel);
-    } catch (err) {
+    resetProgress();
+    showPanel(resultPanel);
+  } catch (err) {
+    resetProgress();
+    if (err instanceof CancelledError) {
+      showPanel(optionsPanel);
+    } else {
       console.error(err);
-      resetProgress();
       showError(`Something went wrong while compressing this PDF: ${err.message || err}`);
-    } finally {
-      compressBtn.disabled = false;
     }
-  });
-})();
+  } finally {
+    setBusy(false);
+  }
+});
+
+// ---------- convert ----------
+
+function addPageCard(page) {
+  const card = document.createElement('figure');
+  card.className = 'image-card';
+  const link = document.createElement('a');
+  link.href = trackUrl(page.url);
+  link.download = page.name;
+  const img = document.createElement('img');
+  img.src = page.url;
+  img.alt = `Page ${page.pageNumber}`;
+  img.loading = 'lazy';
+  link.appendChild(img);
+  const caption = document.createElement('figcaption');
+  caption.innerHTML =
+    `<span class="image-card__name">${escapeHtml(page.name)}</span>` +
+    `<span class="image-card__meta">${page.width}×${page.height} · ${formatBytes(page.bytes.length)}</span>`;
+  card.append(link, caption);
+  imagesGrid.appendChild(card);
+}
+
+convertBtn.addEventListener('click', async () => {
+  if (!currentFile || busy) return;
+  cancelled = false;
+  setBusy(true);
+  setProgress(0.02, 'Reading file…');
+  releaseUrls();
+  renderedPages = [];
+  imagesGrid.innerHTML = '';
+
+  const baseName = currentFile.name.replace(/\.pdf$/i, '') || 'page';
+
+  try {
+    const pdfBytes = new Uint8Array(await currentFile.arrayBuffer());
+    const pages = await renderPdfToImages(
+      pdfBytes,
+      {
+        dpi: Number(convertDpi.value),
+        maxWidth: Number(convertMaxWidth.value) || 0,
+        maxHeight: Number(convertMaxHeight.value) || 0,
+        format: convertFormat.value,
+        quality: Number(convertQuality.value),
+        grayscale: convertGrayscale.checked,
+        pageRange: convertPages.value,
+        baseName,
+      },
+      (fraction, text) => setProgress(0.05 + fraction * 0.9, text),
+      (page) => addPageCard(page),
+      () => cancelled,
+    );
+
+    renderedPages = pages;
+    const totalBytes = pages.reduce((sum, page) => sum + page.bytes.length, 0);
+    imagesSummary.textContent =
+      `${pages.length} image(s), ${formatBytes(totalBytes)} in total. ` +
+      'Click any page to save it on its own.';
+    downloadZipBtn.disabled = pages.length === 0;
+
+    resetProgress();
+    showPanel(imagesPanel);
+  } catch (err) {
+    resetProgress();
+    if (err instanceof CancelledError) {
+      if (renderedPages.length === 0) imagesGrid.innerHTML = '';
+      showPanel(optionsPanel);
+    } else {
+      console.error(err);
+      showError(`Something went wrong while converting this PDF: ${err.message || err}`);
+    }
+  } finally {
+    setBusy(false);
+  }
+});
+
+downloadZipBtn.addEventListener('click', () => {
+  if (!renderedPages.length) return;
+  const zip = createZip(renderedPages.map((page) => ({ name: page.name, data: page.bytes })));
+  const link = document.createElement('a');
+  link.href = trackUrl(URL.createObjectURL(zip));
+  link.download = `${(currentFile?.name || 'pages').replace(/\.pdf$/i, '')}-images.zip`;
+  link.click();
+});
+
+window.addEventListener('beforeunload', releaseUrls);

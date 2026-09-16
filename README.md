@@ -1,54 +1,95 @@
 # Compress PDF
 
-A tiny, client-side website that shrinks PDF file size by recompressing the
-images embedded inside it. Everything happens in your browser — no PDF is
-ever uploaded to a server.
+A tiny, client-side website that does two things with a PDF, without ever
+uploading it anywhere:
+
+- **Compress it** by recompressing the images embedded inside it.
+- **Convert it to images** — one JPEG, PNG or WebP per page.
 
 **Live app:** enable GitHub Pages for this repo (see below) and it will be
 served at `https://<your-username>.github.io/compress-pdf/`.
 
-## How it works
+## Compressing
 
 1. You pick a PDF (drag & drop or file picker).
 2. The app parses the PDF's internal object structure with
-   [pdf-lib](https://pdf-lib.js.org/) and finds every embedded image
-   (JPEG images, plus simple uncompressed raster images).
-3. Each image is decoded using the browser's built-in image codecs, drawn to
-   a `<canvas>` (optionally downscaled and/or desaturated), and re-encoded as
-   a JPEG using a WebAssembly build of [MozJPEG](https://github.com/mozilla/mozjpeg)
-   (via [`@jsquash/jpeg`](https://github.com/jamsinclair/jSquash)) at the
-   quality level you choose. MozJPEG's encoder (trellis quantization,
-   optimized Huffman tables, etc.) produces meaningfully smaller files than
-   the browser's built-in JPEG encoder at the same visual quality — if WASM
-   is unavailable for some reason, it falls back to the native
-   `canvas.toBlob('image/jpeg')` encoder automatically.
+   [pdf-lib](https://pdf-lib.js.org/) and finds every embedded image.
+3. Each image is decoded, optionally downscaled and/or desaturated, and
+   re-encoded as a JPEG using a WebAssembly build of
+   [MozJPEG](https://github.com/mozilla/mozjpeg) (via
+   [`@jsquash/jpeg`](https://github.com/jamsinclair/jSquash)) at the quality
+   you choose. MozJPEG's encoder (trellis quantization, optimized Huffman
+   tables, etc.) produces meaningfully smaller files than the browser's
+   built-in JPEG encoder at the same visual quality — if WASM is unavailable
+   for some reason, it falls back to `canvas.toBlob('image/jpeg')`.
 4. If the recompressed image is smaller than the original, it replaces the
    image inside the PDF's object graph. The rest of the PDF (text, fonts,
    vector graphics, layout) is left untouched.
-5. The resulting PDF is offered back to you as a download — nothing is sent
-   anywhere.
+5. The resulting PDF is offered back to you as a download.
 
-This stays a plain HTML/CSS/JS site with no build step: the MozJPEG
-WebAssembly module and pdf-lib are vendored locally
-(`vendor/mozjpeg/`, `vendor/pdf-lib.min.js` — both permissively licensed, see
-their respective `LICENSE` files) and loaded directly by the browser, so the
-whole thing works offline with no bundler and no runtime CDN dependency.
+### How images get decoded
 
-Note: WebP is not usable here — the PDF spec has no filter for decoding WebP
-image streams, so a WebP-encoded image embedded in a PDF wouldn't render in
-any standard PDF viewer (Acrobat, browsers, PDF.js, etc.). JPEG (via the
-standard `DCTDecode` filter) is the best-supported lossy format PDF actually
-defines, which is why the effort here went into a better JPEG encoder
-instead. By default, the app also does **not** downscale image resolution
-(the "max image resolution" slider defaults to "No limit") since resizing
-tends to cause more visible quality loss than a well-tuned JPEG quality
-setting — lower it yourself if you want to trade resolution for extra size
-savings.
+Image decoding is where most PDF compressors quietly give up, and it is the
+main reason a big PDF can come back barely smaller: the handful of images
+that hold most of the bytes are exactly the ones in formats the browser
+cannot read. So there are two decode paths:
 
-Images that use formats this simple approach can't safely handle (e.g.
-CMYK/JPEG2000/CCITT fax scans, indexed color, images with transparency
-masks) are left as-is rather than risking corruption — the app tells you if
-some images couldn't be compressed further.
+- **Plain JPEG** (`DCTDecode` in a grey or RGB colour space) goes straight to
+  the browser's own decoder. Fast, and it covers the common case.
+- **Everything else** is handed to [PDF.js](https://mozilla.github.io/pdf.js/).
+  The single image is wrapped in a throwaway one-page PDF and that page is
+  rendered to a canvas, which makes PDF.js's worker do the decoding. That
+  covers JPEG 2000 (`JPXDecode`), JBIG2, CCITT Group 3/4 fax, LZW,
+  run-length, flate with PNG/TIFF predictors, and multi-filter chains — in
+  indexed-palette, CMYK, ICC-based, Lab, Separation and DeviceN colour, at
+  any bit depth, with `/Decode` arrays applied. Rendering happens directly at
+  the target resolution, so downscaling a 6000px scan never allocates a
+  6000px canvas.
+
+Because everything ends up as a canvas, the output is always a plain
+`DCTDecode` JPEG in `/DeviceRGB` (or `/DeviceGray`) — the only widely
+supported lossy filter the PDF spec actually defines. WebP and AVIF are not
+usable here: PDF has no filter for decoding them, so a WebP-encoded image
+inside a PDF would not render in any standard viewer.
+
+Images are still left alone when recompressing them would be unsafe or
+pointless, and the result screen lists exactly which ones and why:
+
+| Left unchanged | Why |
+| --- | --- |
+| Stencil masks (`/ImageMask true`) | 1-bit on/off masks; a lossy JPEG would fray their edges |
+| Colour-key masked images (`/Mask [...]`) | The mask names exact colour values in the original colour space |
+| Soft masks with `/Matte` | The colour data is pre-blended against the mask |
+| JPEG 2000 with `/SMaskInData` | Its alpha lives inside the codestream, and `DCTDecode` has nowhere to put it |
+| Anything under ~1 KB | Re-encoding costs more bytes than it saves |
+| Images that grew | The original was already better compressed |
+
+Soft masks (`/SMask`) *are* recompressed, as single-channel grey JPEGs, but
+never below quality 60 — alpha channels show ringing artifacts long before
+photos do.
+
+Encrypted (password-protected) PDFs are rejected up front rather than
+silently producing a corrupt file.
+
+## Converting pages to images
+
+The same PDF.js build renders whole pages. You choose the format (JPEG, PNG
+or WebP), the render resolution in DPI, optional max width/height caps, the
+quality for lossy formats, grayscale, and which pages (`all`, `1-5`,
+`1,3,7-9`). Each page comes back as its own download, plus a "download all"
+`.zip` built in the browser by a ~50-line store-only ZIP writer.
+
+## No build step
+
+This stays a plain HTML/CSS/JS site: pdf-lib, PDF.js and the MozJPEG
+WebAssembly module are vendored locally (`vendor/`, all permissively
+licensed — see the `LICENSE` files in each directory) and loaded directly by
+the browser. No bundler, no runtime CDN dependency, works offline.
+
+`vendor/pdfjs/` also carries PDF.js's optional data files — `wasm/` (the
+OpenJPEG, JBIG2 and QCMS modules), `standard_fonts/`, `cmaps/` and `iccs/` —
+so exotic PDFs decode and render correctly without reaching out to a CDN.
+They are fetched lazily, only by the documents that need them.
 
 ## Local development
 
@@ -60,6 +101,9 @@ python3 -m http.server 8080
 # then open http://localhost:8080
 ```
 
+Note that it has to be served over HTTP rather than opened as a `file://`
+URL, because it uses ES modules and a Web Worker.
+
 ## Deployment
 
 A GitHub Actions workflow at `.github/workflows/deploy.yml` deploys this
@@ -69,5 +113,6 @@ is set to the "GitHub Actions" source under **Settings → Pages**.
 ## Privacy
 
 All processing happens locally in your browser using the File API, Canvas
-API, and WebAssembly-free JavaScript. No PDF content, image data, or
-metadata is ever transmitted over the network.
+API, Web Workers and WebAssembly. No PDF content, image data, or metadata is
+ever transmitted over the network — the only requests the page makes are for
+its own static assets on the same origin.
