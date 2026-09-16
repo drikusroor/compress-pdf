@@ -1,10 +1,11 @@
 // UI wiring. All of the actual work lives in ./lib.
 
+import { analysePdf } from './lib/pdf-analyse.js';
 import { compressPdfImages } from './lib/pdf-images.js';
 import { renderPdfToImages } from './lib/pdf-render.js';
 import { FORMATS, isFormatSupported } from './lib/encode.js';
 import { createZip } from './lib/zip.js';
-import { CancelledError, formatBytes } from './lib/util.js';
+import { CancelledError, formatBytes, plural, yieldToUI } from './lib/util.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -19,10 +20,12 @@ const errorText = $('error-text');
 const fileNameEl = $('file-name');
 const fileSizeEl = $('file-size');
 
-const tabCompress = $('tab-compress');
-const tabConvert = $('tab-convert');
-const panelCompress = $('panel-compress');
-const panelConvert = $('panel-convert');
+const inspectPanel = $('inspect');
+const tabs = [
+  { id: 'compress', tab: $('tab-compress'), panel: $('panel-compress') },
+  { id: 'convert', tab: $('tab-convert'), panel: $('panel-convert') },
+  { id: 'inspect', tab: $('tab-inspect'), panel: $('panel-inspect') },
+];
 
 const qualityInput = $('quality');
 const qualityValue = $('quality-value');
@@ -59,6 +62,13 @@ const imagesSummary = $('images-summary');
 const imagesGrid = $('images-grid');
 const downloadZipBtn = $('download-zip');
 
+const inspectBtn = $('inspect-btn');
+const inspectFacts = $('inspect-facts');
+const inspectBar = $('inspect-bar');
+const inspectRows = $('inspect-rows');
+const inspectTooltip = $('inspect-tooltip');
+const inspectAdvice = $('inspect-advice');
+
 let currentFile = null;
 let cancelled = false;
 let busy = false;
@@ -78,7 +88,7 @@ function releaseUrls() {
 }
 
 function showPanel(panel) {
-  for (const p of [dropZone, optionsPanel, resultPanel, imagesPanel, errorPanel]) {
+  for (const p of [dropZone, optionsPanel, resultPanel, imagesPanel, inspectPanel, errorPanel]) {
     p.classList.toggle('hidden', p !== panel);
   }
 }
@@ -88,8 +98,9 @@ function showError(message) {
   showPanel(errorPanel);
 }
 
-function setProgress(fraction, text) {
+function setProgress(fraction, text, cancellable = true) {
   progressEl.classList.remove('hidden');
+  cancelBtn.classList.toggle('hidden', !cancellable);
   progressFill.style.width = `${Math.round(Math.min(1, Math.max(0, fraction)) * 100)}%`;
   progressText.textContent = text;
 }
@@ -103,6 +114,7 @@ function setBusy(value) {
   busy = value;
   compressBtn.disabled = value;
   convertBtn.disabled = value;
+  inspectBtn.disabled = value;
 }
 
 // ---------- file selection ----------
@@ -152,6 +164,11 @@ function startOver() {
 $('change-file').addEventListener('click', startOver);
 $('start-over').addEventListener('click', startOver);
 $('images-start-over').addEventListener('click', startOver);
+$('inspect-start-over').addEventListener('click', startOver);
+$('inspect-compress').addEventListener('click', () => {
+  selectTab('compress');
+  showPanel(optionsPanel);
+});
 $('error-dismiss').addEventListener('click', () => showPanel(currentFile ? optionsPanel : dropZone));
 
 cancelBtn.addEventListener('click', () => {
@@ -162,17 +179,17 @@ cancelBtn.addEventListener('click', () => {
 // ---------- tabs ----------
 
 function selectTab(which) {
-  const compress = which === 'compress';
-  tabCompress.classList.toggle('tab--active', compress);
-  tabConvert.classList.toggle('tab--active', !compress);
-  tabCompress.setAttribute('aria-selected', String(compress));
-  tabConvert.setAttribute('aria-selected', String(!compress));
-  panelCompress.classList.toggle('hidden', !compress);
-  panelConvert.classList.toggle('hidden', compress);
+  for (const entry of tabs) {
+    const active = entry.id === which;
+    entry.tab.classList.toggle('tab--active', active);
+    entry.tab.setAttribute('aria-selected', String(active));
+    entry.panel.classList.toggle('hidden', !active);
+  }
 }
 
-tabCompress.addEventListener('click', () => !busy && selectTab('compress'));
-tabConvert.addEventListener('click', () => !busy && selectTab('convert'));
+for (const entry of tabs) {
+  entry.tab.addEventListener('click', () => !busy && selectTab(entry.id));
+}
 
 // ---------- option displays ----------
 
@@ -259,9 +276,9 @@ function summarise(stats, originalSize, compressedSize) {
 
   const parts = [];
   if (stats.compressed === 0) {
-    parts.push(`Found ${stats.total} image(s), but none could be made smaller.`);
+    parts.push(`Found ${plural(stats.total, 'image')}, but none could be made smaller.`);
   } else {
-    parts.push(`Recompressed ${stats.compressed} of ${stats.total} image(s).`);
+    parts.push(`Recompressed ${stats.compressed} of ${plural(stats.total, 'image')}.`);
   }
 
   const imageShare = originalSize > 0 ? (stats.bytesBefore / originalSize) * 100 : 0;
@@ -387,7 +404,7 @@ convertBtn.addEventListener('click', async () => {
     renderedPages = pages;
     const totalBytes = pages.reduce((sum, page) => sum + page.bytes.length, 0);
     imagesSummary.textContent =
-      `${pages.length} image(s), ${formatBytes(totalBytes)} in total. ` +
+      `${plural(pages.length, 'image')}, ${formatBytes(totalBytes)} in total. ` +
       'Click any page to save it on its own.';
     downloadZipBtn.disabled = pages.length === 0;
 
@@ -414,6 +431,188 @@ downloadZipBtn.addEventListener('click', () => {
   link.href = trackUrl(URL.createObjectURL(zip));
   link.download = `${(currentFile?.name || 'pages').replace(/\.pdf$/i, '')}-images.zip`;
   link.click();
+});
+
+// ---------- analyse ----------
+
+// Eight categorical slots, assigned in fixed order by size and never cycled;
+// anything past the seventh folds into a single "Other" segment.
+const MAX_SEGMENTS = 8;
+
+const ADVICE = {
+  images:
+    'Images are the bulk of this file, so recompressing them is exactly the right lever — ' +
+    'head to the Compress tab. Lowering the resolution limit usually saves more than ' +
+    'lowering quality.',
+  fonts:
+    'Most of the weight is <strong>embedded font programs</strong>. That happens when fonts are ' +
+    'embedded in full rather than subset to the characters actually used — a CJK or icon ' +
+    'face can be many megabytes on its own. This tool cannot subset fonts; re-exporting ' +
+    'from the source application with font subsetting enabled is the fix.',
+  content:
+    'Most of the weight is <strong>page content</strong>: the vector drawing and text-placement ' +
+    'operators that make up the pages. Maps, CAD exports and detailed charts land here. ' +
+    'There is no lossy compression for vector data, so nothing this tool does will shrink ' +
+    'it — simplifying the artwork at the source, or flattening pages to images, is what ' +
+    'moves the needle.',
+  unreferenced:
+    'Most of the weight is in objects that <strong>nothing in the document refers to any more</strong> — ' +
+    'leftovers from incremental saves, where every edit appended a new revision without ' +
+    'removing the old one. A plain "Save as" in most PDF tools rewrites the file without them.',
+  attachments:
+    'Most of the weight is <strong>files attached to the PDF</strong> rather than the document itself. ' +
+    'Removing or shrinking the attachments is the only thing that will help.',
+  annotations:
+    'Most of the weight is in <strong>annotations and form fields</strong> — comments, stamps, signature ' +
+    'appearances or an XFA form definition. Flattening the form in a PDF editor usually ' +
+    'collapses this.',
+  thumbnails:
+    'Most of the weight is <strong>pre-rendered page thumbnails</strong>, which every modern viewer ' +
+    'regenerates on its own. Most PDF tools drop them on a "Save as".',
+  metadata:
+    'Most of the weight is <strong>metadata</strong> — usually an oversized XMP packet. Stripping ' +
+    'metadata in a PDF editor removes it.',
+  colour:
+    'Most of the weight is <strong>embedded ICC colour profiles</strong>. They matter for print ' +
+    'accuracy; for screen-only use they can be dropped at export time.',
+  structureTree:
+    'Most of the weight is <strong>tagged-PDF structure</strong> — the reading order and semantics that ' +
+    'screen readers rely on. It compresses poorly, and removing it costs accessibility, ' +
+    'so this is usually weight worth keeping.',
+  structure:
+    'Most of the weight is in the document\'s own <strong>structure</strong> rather than any of its content: ' +
+    'a very large number of small objects, or cross-reference tables that were never ' +
+    'compressed. Saving through a tool that writes object streams typically shrinks this.',
+  other:
+    'The bulk of this file is in streams that do not fall into any of the usual categories.',
+};
+
+function paletteColor(index) {
+  return `var(--series-${index + 1})`;
+}
+
+/** Top rows keep their own colour; the tail becomes one "Other" segment. */
+function toSegments(breakdown) {
+  if (breakdown.length <= MAX_SEGMENTS) return breakdown.map((row, i) => ({ ...row, color: paletteColor(i) }));
+  const head = breakdown.slice(0, MAX_SEGMENTS - 1).map((row, i) => ({ ...row, color: paletteColor(i) }));
+  const tail = breakdown.slice(MAX_SEGMENTS - 1);
+  return [
+    ...head,
+    {
+      key: 'folded',
+      label: `Other (${tail.map((row) => row.label).join(', ')})`,
+      bytes: tail.reduce((sum, row) => sum + row.bytes, 0),
+      count: tail.reduce((sum, row) => sum + row.count, 0),
+      share: tail.reduce((sum, row) => sum + row.share, 0),
+      color: paletteColor(MAX_SEGMENTS - 1),
+    },
+  ];
+}
+
+function highlight(key) {
+  const segments = inspectBar.querySelectorAll('.viz__segment');
+  const rows = inspectRows.querySelectorAll('tr');
+  inspectBar.classList.toggle('is-hovering', key !== null);
+  for (const node of [...segments, ...rows]) {
+    node.classList.toggle('is-active', key !== null && node.dataset.key === key);
+  }
+}
+
+function showTooltip(segment, data) {
+  inspectTooltip.textContent = `${data.label} — ${formatBytes(data.bytes)} (${formatShare(data.share)})`;
+  const barBox = inspectBar.getBoundingClientRect();
+  const box = segment.getBoundingClientRect();
+  const centre = box.left - barBox.left + box.width / 2;
+  inspectTooltip.style.left = `${Math.min(Math.max(centre, 60), barBox.width - 60)}px`;
+  inspectTooltip.classList.add('is-visible');
+}
+
+function formatShare(share) {
+  const percent = share * 100;
+  if (percent >= 1) return `${percent.toFixed(0)}%`;
+  return percent >= 0.1 ? `${percent.toFixed(1)}%` : '<0.1%';
+}
+
+function renderBreakdown(analysis) {
+  const segments = toSegments(analysis.breakdown);
+
+  inspectBar.innerHTML = '';
+  inspectRows.innerHTML = '';
+  inspectTooltip.classList.remove('is-visible');
+
+  for (const data of segments) {
+    const segment = document.createElement('div');
+    segment.className = 'viz__segment';
+    segment.dataset.key = data.key;
+    segment.style.setProperty('--segment-color', data.color);
+    segment.style.flexGrow = String(Math.max(data.share, 0.002));
+    segment.style.flexBasis = '0';
+    segment.title = `${data.label} — ${formatBytes(data.bytes)} (${formatShare(data.share)})`;
+    segment.addEventListener('pointerenter', () => {
+      highlight(data.key);
+      showTooltip(segment, data);
+    });
+    inspectBar.appendChild(segment);
+
+    const row = document.createElement('tr');
+    row.dataset.key = data.key;
+    row.innerHTML =
+      `<td><span class="swatch" style="--segment-color: ${data.color}"></span>${escapeHtml(data.label)}</td>` +
+      `<td>${data.count.toLocaleString()}</td>` +
+      `<td>${formatBytes(data.bytes)}</td>` +
+      `<td>${formatShare(data.share)}</td>`;
+    row.addEventListener('pointerenter', () => highlight(data.key));
+    inspectRows.appendChild(row);
+  }
+
+  const clear = () => {
+    highlight(null);
+    inspectTooltip.classList.remove('is-visible');
+  };
+  inspectBar.addEventListener('pointerleave', clear);
+  inspectRows.addEventListener('pointerleave', clear);
+
+  const facts = [plural(analysis.pageCount, 'page'), plural(analysis.objectCount, 'object')];
+  if (analysis.encrypted) facts.push('encrypted');
+  if (analysis.producer) facts.push(`produced by ${analysis.producer}`);
+  inspectFacts.textContent = `${formatBytes(analysis.fileSize)} · ${facts.join(' · ')}`;
+
+  const largest = analysis.breakdown[0];
+  const notes = [];
+  if (largest) {
+    notes.push(
+      `The biggest item is <strong>${escapeHtml(largest.label)}</strong>, at ${formatShare(largest.share)} of the file. ` +
+        (ADVICE[largest.key] || ''),
+    );
+  }
+  if (analysis.uncompressed.bytes > analysis.fileSize * 0.05) {
+    notes.push(
+      `${formatBytes(analysis.uncompressed.bytes)} of it is stored <strong>without any compression</strong> ` +
+        `(${plural(analysis.uncompressed.count, 'stream')}) — deflating those alone would shrink the file.`,
+    );
+  }
+  inspectAdvice.innerHTML = notes.join('</p><p>');
+}
+
+inspectBtn.addEventListener('click', async () => {
+  if (!currentFile || busy) return;
+  setBusy(true);
+  setProgress(0.3, 'Reading every object…');
+
+  try {
+    const bytes = new Uint8Array(await currentFile.arrayBuffer());
+    await yieldToUI();
+    const analysis = await analysePdf(bytes);
+    renderBreakdown(analysis);
+    resetProgress();
+    showPanel(inspectPanel);
+  } catch (err) {
+    resetProgress();
+    console.error(err);
+    showError(`Could not read this PDF: ${err.message || err}`);
+  } finally {
+    setBusy(false);
+  }
 });
 
 window.addEventListener('beforeunload', releaseUrls);

@@ -44,9 +44,11 @@
 
         <div class="tabs" role="tablist" aria-label="What to do with this PDF">
           <button id="tab-compress" class="tab tab--active" type="button" role="tab"
-                  aria-selected="true" aria-controls="panel-compress">Compress PDF</button>
+                  aria-selected="true" aria-controls="panel-compress">Compress</button>
           <button id="tab-convert" class="tab" type="button" role="tab"
                   aria-selected="false" aria-controls="panel-convert">PDF → images</button>
+          <button id="tab-inspect" class="tab" type="button" role="tab"
+                  aria-selected="false" aria-controls="panel-inspect">What's inside</button>
         </div>
 
         <div id="panel-compress" class="tab-panel" role="tabpanel" aria-labelledby="tab-compress">
@@ -143,6 +145,15 @@
           <button id="convert-btn" class="btn btn--primary" type="button">Convert to images</button>
         </div>
 
+        <div id="panel-inspect" class="tab-panel hidden" role="tabpanel" aria-labelledby="tab-inspect">
+          <p class="panel-intro">
+            Measure where this file's bytes actually go. Compressing images only
+            helps if images are what the file is made of — this tells you whether
+            they are, and what to do instead when they are not.
+          </p>
+          <button id="inspect-btn" class="btn btn--primary" type="button">Analyse this PDF</button>
+        </div>
+
         <div id="progress" class="progress hidden">
           <div class="progress__bar">
             <div id="progress-fill" class="progress__fill"></div>
@@ -190,6 +201,29 @@
           <button id="images-start-over" class="btn btn--ghost" type="button">Convert another file</button>
         </div>
         <div id="images-grid" class="image-grid"></div>
+      </section>
+
+      <section id="inspect" class="panel hidden">
+        <h2>What's inside 🔍</h2>
+        <p id="inspect-facts" class="result-note"></p>
+
+        <div class="viz">
+          <div id="inspect-bar" class="viz__bar" role="img" aria-label="Proportion of the file taken by each kind of content"></div>
+          <div id="inspect-tooltip" class="viz__tooltip" role="status" aria-live="polite"></div>
+          <table class="detail-table detail-table--legend">
+            <thead>
+              <tr><th>What</th><th>Objects</th><th>Size</th><th>Share</th></tr>
+            </thead>
+            <tbody id="inspect-rows"></tbody>
+          </table>
+        </div>
+
+        <p id="inspect-advice" class="advice"></p>
+
+        <div class="result-actions">
+          <button id="inspect-compress" class="btn btn--primary" type="button">Compress this PDF</button>
+          <button id="inspect-start-over" class="btn btn--ghost" type="button">Analyse another file</button>
+        </div>
       </section>
 
       <section id="error" class="panel panel--error hidden">

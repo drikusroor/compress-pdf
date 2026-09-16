@@ -13,6 +13,20 @@
   --error-bg: #2a1616;
   --radius: 12px;
   color-scheme: dark;
+
+  /* Categorical chart slots, assigned in fixed order and never cycled. These
+     are the dark steps of the reference data-viz palette, validated as a set
+     against this page's panel surface: all eight clear the lightness band,
+     chroma floor, 3:1 contrast, and the adjacent-pair separation gates for
+     normal and colour-deficient vision. */
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
 }
 
 * {
@@ -342,12 +356,12 @@ input[type="range"] {
 
 .tab {
   flex: 1;
-  padding: 0.55rem 0.75rem;
+  padding: 0.55rem 0.4rem;
   border: none;
   border-radius: 8px;
   background: transparent;
   color: var(--text-dim);
-  font-size: 0.9rem;
+  font-size: 0.83rem;
   font-weight: 600;
   cursor: pointer;
   transition: background-color 0.15s ease, color 0.15s ease;
@@ -514,6 +528,100 @@ input[type="range"] {
   white-space: nowrap;
 }
 
+.panel-intro {
+  margin: 0 0 1.5rem;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+}
+
+.viz {
+  /* The top padding is the tooltip's own band, so it never covers the table. */
+  margin: 1.5rem 0 0;
+  padding-top: 2.1rem;
+  position: relative;
+}
+
+/* Part-to-whole: one horizontal stacked bar. Segments are separated by a gap
+   in the surface colour rather than a stroke, so no ink is spent on borders. */
+.viz__bar {
+  display: flex;
+  gap: 2px;
+  height: 28px;
+  width: 100%;
+}
+
+.viz__segment {
+  min-width: 2px;
+  border-radius: 2px;
+  background: var(--segment-color);
+  transition: opacity 0.12s ease;
+}
+
+.viz__segment:first-child {
+  border-radius: 4px 2px 2px 4px;
+}
+
+.viz__segment:last-child {
+  border-radius: 2px 4px 4px 2px;
+}
+
+.viz__bar.is-hovering .viz__segment:not(.is-active) {
+  opacity: 0.4;
+}
+
+.viz__tooltip {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  max-width: min(260px, 90%);
+  padding: 0.3rem 0.55rem;
+  border-radius: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 0.78rem;
+  text-align: center;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 2;
+}
+
+.viz__tooltip.is-visible {
+  opacity: 1;
+}
+
+.detail-table--legend {
+  margin-top: 1.5rem;
+}
+
+.detail-table--legend tr.is-active td {
+  color: var(--text);
+}
+
+.swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  margin-right: 0.5rem;
+  background: var(--segment-color);
+  vertical-align: baseline;
+}
+
+.advice {
+  margin: 1.5rem 0 0;
+  padding: 0.9rem 1rem;
+  border-left: 3px solid var(--accent);
+  background: var(--bg);
+  border-radius: 0 8px 8px 0;
+  font-size: 0.87rem;
+  color: var(--text-dim);
+}
+
+.advice strong {
+  color: var(--text);
+}
+
 @media (min-width: 480px) {
   .result-actions {
     flex-direction: row;
@@ -530,5 +638,9 @@ input[type="range"] {
 
   .control-row .control {
     flex: 1;
+  }
+
+  .tab {
+    padding: 0.55rem 0.75rem;
   }
 }

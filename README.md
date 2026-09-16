@@ -1,10 +1,12 @@
 # Compress PDF
 
-A tiny, client-side website that does two things with a PDF, without ever
+A tiny, client-side website that does three things with a PDF, without ever
 uploading it anywhere:
 
 - **Compress it** by recompressing the images embedded inside it.
 - **Convert it to images** — one JPEG, PNG or WebP per page.
+- **Tell you where its bytes actually went**, so you know whether compressing
+  the images is even the right lever.
 
 **Live app:** enable GitHub Pages for this repo (see below) and it will be
 served at `https://<your-username>.github.io/compress-pdf/`.
@@ -70,6 +72,29 @@ photos do.
 
 Encrypted (password-protected) PDFs are rejected up front rather than
 silently producing a corrupt file.
+
+## Finding out where the bytes went
+
+Recompressing images only helps if images are what a file is made of. The
+**What's inside** tab measures that, so you don't have to guess: it walks the
+object graph from the trailer and attributes every stream in the file to what
+it is for — images, embedded font programs, page content and vector art,
+annotations, attachments, thumbnails, metadata, colour profiles, tagged-PDF
+structure — and reports the rest as document structure. The numbers are the
+stored (still-compressed) lengths, and they add up to exactly the file size.
+
+Two categories are worth calling out:
+
+- **Unreferenced leftovers** — streams the walk never reaches. Nothing in the
+  document refers to them any more; they are prior revisions left behind by
+  incremental saves, and a plain "save as" in most PDF tools drops them.
+- **Uncompressed streams** — anything stored with no `/Filter` at all, which
+  some producers emit. Reported separately, since deflating those alone would
+  shrink the file.
+
+Whichever category is largest, the app says what actually helps — which for a
+font-heavy or vector-heavy file is *not* this tool. It works on encrypted PDFs
+too, since measuring a stream does not require decrypting it.
 
 ## Converting pages to images
 
