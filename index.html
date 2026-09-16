@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Compress PDF — client-side PDF image compressor</title>
-  <meta name="description" content="Shrink PDF file size by recompressing the images inside it. Runs entirely in your browser — nothing is uploaded." />
+  <title>Compress PDF — client-side PDF compressor &amp; page-to-image converter</title>
+  <meta name="description" content="Shrink a PDF by recompressing the images inside it, or turn its pages into JPEG/PNG/WebP images. Runs entirely in your browser — nothing is uploaded." />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🗜️</text></svg>" />
   <link rel="stylesheet" href="style.css" />
 </head>
@@ -13,8 +13,9 @@
     <header class="hero">
       <h1>🗜️ Compress PDF</h1>
       <p class="subtitle">
-        Shrink a PDF by recompressing its images — entirely in your browser.
-        Nothing is uploaded anywhere; your files never leave this device.
+        Shrink a PDF by recompressing its images, or export its pages as images —
+        entirely in your browser. Nothing is uploaded anywhere; your files never
+        leave this device.
       </p>
     </header>
 
@@ -41,38 +42,115 @@
           <button id="change-file" class="btn btn--ghost" type="button">Change file</button>
         </div>
 
-        <div class="controls">
-          <label class="control">
-            <span class="control__label">
-              Image quality
-              <span id="quality-value" class="control__value">75%</span>
-            </span>
-            <input type="range" id="quality" min="10" max="95" step="5" value="75" />
-            <span class="control__hint">Lower quality = smaller file. 60–80% is usually a good balance.</span>
-          </label>
-
-          <label class="control">
-            <span class="control__label">
-              Max image resolution
-              <span id="max-dim-value" class="control__value">No limit</span>
-            </span>
-            <input type="range" id="max-dim" min="400" max="4000" step="100" value="4000" />
-            <span class="control__hint">Images wider or taller than this are downscaled. Lower this only if you don't need full resolution — it can blur text/photos more than the quality slider does.</span>
-          </label>
-
-          <label class="control control--checkbox">
-            <input type="checkbox" id="grayscale" />
-            <span>Convert images to grayscale (extra savings for text/scans)</span>
-          </label>
+        <div class="tabs" role="tablist" aria-label="What to do with this PDF">
+          <button id="tab-compress" class="tab tab--active" type="button" role="tab"
+                  aria-selected="true" aria-controls="panel-compress">Compress PDF</button>
+          <button id="tab-convert" class="tab" type="button" role="tab"
+                  aria-selected="false" aria-controls="panel-convert">PDF → images</button>
         </div>
 
-        <button id="compress-btn" class="btn btn--primary" type="button">Compress PDF</button>
+        <div id="panel-compress" class="tab-panel" role="tabpanel" aria-labelledby="tab-compress">
+          <div class="controls">
+            <label class="control">
+              <span class="control__label">
+                Image quality
+                <span id="quality-value" class="control__value">75%</span>
+              </span>
+              <input type="range" id="quality" min="10" max="95" step="5" value="75" />
+              <span class="control__hint">Lower quality = smaller file. 60–80% is usually a good balance.</span>
+            </label>
+
+            <label class="control">
+              <span class="control__label">
+                Max image resolution
+                <span id="max-dim-value" class="control__value">No limit</span>
+              </span>
+              <input type="range" id="max-dim" min="400" max="4000" step="100" value="4000" />
+              <span class="control__hint">Images wider or taller than this are downscaled. This is the biggest lever on file size for photo-heavy or scanned PDFs.</span>
+            </label>
+
+            <label class="control control--checkbox">
+              <input type="checkbox" id="grayscale" />
+              <span>Convert images to grayscale (extra savings for text/scans)</span>
+            </label>
+          </div>
+
+          <button id="compress-btn" class="btn btn--primary" type="button">Compress PDF</button>
+        </div>
+
+        <div id="panel-convert" class="tab-panel hidden" role="tabpanel" aria-labelledby="tab-convert">
+          <div class="controls">
+            <div class="control-row">
+              <label class="control">
+                <span class="control__label">Image format</span>
+                <select id="convert-format" class="select">
+                  <option value="jpeg" selected>JPEG (.jpg)</option>
+                  <option value="png">PNG (.png)</option>
+                  <option value="webp">WebP (.webp)</option>
+                </select>
+                <span class="control__hint">JPEG is smallest, PNG is lossless, WebP splits the difference.</span>
+              </label>
+
+              <label class="control">
+                <span class="control__label">Resolution</span>
+                <select id="convert-dpi" class="select">
+                  <option value="72">72 DPI (screen, smallest)</option>
+                  <option value="96">96 DPI</option>
+                  <option value="150" selected>150 DPI (good default)</option>
+                  <option value="200">200 DPI</option>
+                  <option value="300">300 DPI (print)</option>
+                  <option value="600">600 DPI (huge)</option>
+                </select>
+                <span class="control__hint">How finely each page is rendered before any size cap below.</span>
+              </label>
+            </div>
+
+            <label class="control" id="convert-quality-control">
+              <span class="control__label">
+                Image quality
+                <span id="convert-quality-value" class="control__value">85%</span>
+              </span>
+              <input type="range" id="convert-quality" min="10" max="100" step="5" value="85" />
+              <span class="control__hint">Only applies to lossy formats (JPEG and WebP).</span>
+            </label>
+
+            <div class="control-row">
+              <label class="control">
+                <span class="control__label">Max width (px)</span>
+                <input type="number" id="convert-max-width" class="number-input" min="0" step="1" placeholder="No limit" />
+              </label>
+              <label class="control">
+                <span class="control__label">Max height (px)</span>
+                <input type="number" id="convert-max-height" class="number-input" min="0" step="1" placeholder="No limit" />
+              </label>
+            </div>
+            <p class="control__hint control__hint--standalone">
+              Pages are scaled down to fit inside these limits. Leave blank for no cap.
+            </p>
+
+            <label class="control">
+              <span class="control__label">Pages</span>
+              <input type="text" id="convert-pages" class="text-input" placeholder="all" value="" />
+              <span class="control__hint">For example <code>all</code>, <code>1-5</code>, or <code>1,3,7-9</code>.</span>
+            </label>
+
+            <label class="control control--checkbox">
+              <input type="checkbox" id="convert-grayscale" />
+              <span>Convert pages to grayscale</span>
+            </label>
+          </div>
+
+          <button id="convert-btn" class="btn btn--primary" type="button">Convert to images</button>
+        </div>
 
         <div id="progress" class="progress hidden">
           <div class="progress__bar">
             <div id="progress-fill" class="progress__fill"></div>
           </div>
-          <div id="progress-text" class="progress__text">Working…</div>
+          <div class="progress__row">
+            <div id="progress-text" class="progress__text">Working…</div>
+            <button id="cancel-btn" class="btn btn--ghost btn--small" type="button">Cancel</button>
+          </div>
         </div>
       </section>
 
@@ -98,6 +176,20 @@
           <button id="start-over" class="btn btn--ghost" type="button">Compress another file</button>
         </div>
         <p id="result-note" class="result-note hidden"></p>
+        <details id="result-details" class="details hidden">
+          <summary>What happened to each image</summary>
+          <div id="result-details-body"></div>
+        </details>
+      </section>
+
+      <section id="images" class="panel hidden">
+        <h2>Your images 🖼️</h2>
+        <p id="images-summary" class="result-note"></p>
+        <div class="result-actions">
+          <button id="download-zip" class="btn btn--primary" type="button">Download all as .zip</button>
+          <button id="images-start-over" class="btn btn--ghost" type="button">Convert another file</button>
+        </div>
+        <div id="images-grid" class="image-grid"></div>
       </section>
 
       <section id="error" class="panel panel--error hidden">
@@ -108,7 +200,8 @@
 
     <footer class="site-footer">
       <p>
-        Runs 100% client-side using <a href="https://pdf-lib.js.org/" target="_blank" rel="noopener noreferrer">pdf-lib</a>
+        Runs 100% client-side using <a href="https://pdf-lib.js.org/" target="_blank" rel="noopener noreferrer">pdf-lib</a>,
+        <a href="https://mozilla.github.io/pdf.js/" target="_blank" rel="noopener noreferrer">PDF.js</a>
         and a WebAssembly build of <a href="https://github.com/mozilla/mozjpeg" target="_blank" rel="noopener noreferrer">MozJPEG</a>.
         No files are ever uploaded to a server.
         &middot; <a href="https://github.com/drikusroor/compress-pdf" target="_blank" rel="noopener noreferrer">Source on GitHub</a>
@@ -117,6 +210,6 @@
   </div>
 
   <script src="vendor/pdf-lib.min.js"></script>
-  <script src="app.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>
